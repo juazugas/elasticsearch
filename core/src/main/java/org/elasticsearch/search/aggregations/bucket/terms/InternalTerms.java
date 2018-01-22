@@ -44,6 +44,7 @@ public abstract class InternalTerms<A extends InternalTerms<A, B>, B extends Int
 
     protected static final ParseField DOC_COUNT_ERROR_UPPER_BOUND_FIELD_NAME = new ParseField("doc_count_error_upper_bound");
     protected static final ParseField SUM_OF_OTHER_DOC_COUNTS = new ParseField("sum_other_doc_count");
+    protected static final ParseField BUCKETS_COUNT_FIELD_NAME = new ParseField("buckets_count");
 
     public abstract static class Bucket<B extends Bucket<B>> extends InternalMultiBucketAggregation.InternalBucket implements Terms.Bucket {
 
@@ -303,6 +304,7 @@ public abstract class InternalTerms<A extends InternalTerms<A, B>, B extends Int
                                                long docCountError, long otherDocCount, List<? extends Bucket> buckets) throws IOException {
         builder.field(DOC_COUNT_ERROR_UPPER_BOUND_FIELD_NAME.getPreferredName(), docCountError);
         builder.field(SUM_OF_OTHER_DOC_COUNTS.getPreferredName(), otherDocCount);
+        builder.field(BUCKETS_COUNT_FIELD_NAME.getPreferredName(), buckets.size());
         builder.startArray(CommonFields.BUCKETS.getPreferredName());
         for (Bucket bucket : buckets) {
             bucket.toXContent(builder, params);
