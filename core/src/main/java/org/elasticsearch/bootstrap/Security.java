@@ -19,8 +19,10 @@
 
 package org.elasticsearch.bootstrap;
 
+import org.elasticsearch.Build;
 import org.elasticsearch.SecureSM;
 import org.elasticsearch.Version;
+import org.elasticsearch.cli.Command;
 import org.elasticsearch.common.SuppressForbidden;
 import org.elasticsearch.common.io.PathUtils;
 import org.elasticsearch.common.network.NetworkModule;
@@ -45,10 +47,12 @@ import java.security.NoSuchAlgorithmException;
 import java.security.Permissions;
 import java.security.Policy;
 import java.security.URIParameter;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
@@ -115,7 +119,12 @@ final class Security {
         Policy.setPolicy(new ESPolicy(createPermissions(environment), getPluginPermissions(environment), filterBadDefaults));
 
         // enable security manager
-        System.setSecurityManager(new SecureSM(new String[] { "org.elasticsearch.bootstrap.", "org.elasticsearch.cli" }));
+        final String[] classesThatCanExit =
+                new String[]{
+                        // SecureSM matches class names as regular expressions so we escape the $ that arises from the nested class name
+                        ElasticsearchUncaughtExceptionHandler.PrivilegedHaltAction.class.getName().replace("$", "\\$"),
+                        Command.class.getName()};
+        System.setSecurityManager(new SecureSM(classesThatCanExit));
 
         // do some basic tests
         selfTest();
@@ -190,6 +199,7 @@ final class Security {
     @SuppressForbidden(reason = "accesses fully qualified URLs to configure security")
     static Policy readPolicy(URL policyFile, Set<URL> codebases) {
         try {
+            List<String> propertiesSet = new ArrayList<>();
             try {
                 // set codebase properties
                 for (URL url : codebases) {
@@ -197,7 +207,22 @@ final class Security {
                     if (shortName.endsWith(".jar") == false) {
                         continue; // tests :(
                     }
-                    String previous = System.setProperty("codebase." + shortName, url.toString());
+                    String property = "codebase." + shortName;
+                    if (shortName.startsWith("elasticsearch-rest-client")) {
+                        // The rest client is currently the only example where we have an elasticsearch built artifact
+                        // which needs special permissions in policy files when used. This temporary solution is to
+                        // pass in an extra system property that omits the -version.jar suffix the other properties have.
+                        // That allows the snapshots to reference snapshot builds of the client, and release builds to
+                        // referenced release builds of the client, all with the same grant statements.
+                        final String esVersion = Version.CURRENT + (Build.CURRENT.isSnapshot() ? "-SNAPSHOT" : "");
+                        final int index = property.indexOf("-" + esVersion + ".jar");
+                        assert index >= 0;
+                        String restClientAlias = property.substring(0, index);
+                        propertiesSet.add(restClientAlias);
+                        System.setProperty(restClientAlias, url.toString());
+                    }
+                    propertiesSet.add(property);
+                    String previous = System.setProperty(property, url.toString());
                     if (previous != null) {
                         throw new IllegalStateException("codebase property already set: " + shortName + "->" + previous);
                     }
@@ -205,12 +230,8 @@ final class Security {
                 return Policy.getInstance("JavaPolicy", new URIParameter(policyFile.toURI()));
             } finally {
                 // clear codebase properties
-                for (URL url : codebases) {
-                    String shortName = PathUtils.get(url.toURI()).getFileName().toString();
-                    if (shortName.endsWith(".jar") == false) {
-                        continue; // tests :(
-                    }
-                    System.clearProperty("codebase." + shortName);
+                for (String property : propertiesSet) {
+                    System.clearProperty(property);
                 }
             }
         } catch (NoSuchAlgorithmException | URISyntaxException e) {
